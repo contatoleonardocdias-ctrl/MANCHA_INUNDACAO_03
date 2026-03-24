@@ -2,73 +2,67 @@ import pandas as pd
 import geopandas as gpd
 import rasterio
 import numpy as np
-from shapely.geometry import shape
+from shapely.geometry import shape, Point
 from rasterio.features import shapes
 from scipy.ndimage import binary_dilation
 import os
 import gdown
 
-# ID extraído do seu link de compartilhamento
+# ID do seu arquivo no Drive (23S48_ZN_01.tif)
 FILE_ID = "1sBJHHYr0wAKOtO4YHHKZ0fSDj_IiI56_"
 MDE_NOME = "mde_final_utm.tif"
 
 def main():
-    # 1. Download Robusto via gdown (evita arquivos corrompidos)
-    print("Iniciando download do MDE (UTM 23S) do Google Drive...")
+    os.makedirs('output', exist_ok=True)
+    
+    print("Baixando MDE...")
     url = f"https://drive.google.com/uc?id={FILE_ID}"
     gdown.download(url, MDE_NOME, quiet=False)
 
-    # 2. Dados de Santana de Parnaíba (Barragem Genesis I)
-    # x, y em UTM 23S e cota do coroamento conforme Ficha Técnica
-    x, y, cota_rup = 309435, 7406885, 743.0 
+    # Suas coordenadas exatas
+    x, y = 309435, 7406885
 
     try:
         with rasterio.open(MDE_NOME) as src:
-            # Converte a coordenada métrica para o índice do pixel
+            # 1. PEGAR A COTA REAL DO TERRENO NO PONTO
             py, px = src.index(x, y)
             raster = src.read(1)
-            nodata = src.nodata
+            cota_terreno = float(raster[py, px])
             
-            # Validação: se o índice for negativo, o mapa ainda está em graus
-            if py < 0 or py >= src.height or px < 0 or px >= src.width:
-                print(f"❌ ERRO: O ponto ({x}, {y}) está fora dos limites do mapa!")
-                return
-
-            # Ajuste de ignição: Garante que a água comece a fluir
-            if raster[py, px] >= cota_rup:
-                raster[py, px] = cota_rup - 0.5
-
-            # Máscara de inundação (Tudo que for menor ou igual a 743m)
-            mask = (raster <= cota_rup) & (raster != nodata)
+            # 2. DEFINIR COTA DE RUPTURA (1 metro acima do terreno para garantir fluxo)
+            # Se a cota do coroamento for 743m e o terreno for 740m, ele usa 743m.
+            cota_rup = max(743.0, cota_terreno + 1.0)
             
-            # Algoritmo de Propagação (Flood Fill)
+            print(f"DEBUG: Cota no terreno: {cota_terreno:.2f}m")
+            print(f"DEBUG: Cota de ruptura simulada: {cota_rup:.2f}m")
+
+            # MÁSCARA E PROPAGAÇÃO
+            mask = (raster <= cota_rup) & (raster != src.nodata)
             seed = np.zeros_like(mask, dtype=bool)
             seed[py, px] = True
             inundacao = np.zeros_like(mask, dtype=bool)
             
-            print("Modelando deslocamento a jusante e esparramamento lateral...")
-            for i in range(5000): # Aumentado para cobrir maior extensão do vale
+            print("Modelando esparramamento lateral...")
+            for i in range(5000):
                 expandida = binary_dilation(seed, structure=np.ones((3,3)))
                 seed = expandida & mask
                 if not seed.any(): break
                 inundacao |= seed
 
-            # Transforma os pixels inundados em Polígono (Vetor)
-            geoms = [shape(s) for s, v in shapes(inundacao.astype('int16'), 
-                                                 mask=inundacao==1, 
-                                                 transform=src.transform)]
+            geoms = [shape(s) for s, v in shapes(inundacao.astype('int16'), mask=inundacao==1, transform=src.transform)]
 
         if geoms:
-            os.makedirs('output', exist_ok=True)
             gdf = gpd.GeoDataFrame(geometry=geoms, crs="EPSG:31983")
-            # Une todos os polígonos em uma única mancha
-            gdf.dissolve().to_file("output/MANCHA_ESTUDO_HIDRO.shp")
-            print("✅ SUCESSO: Mancha real gerada com base no relevo!")
+            gdf.dissolve().to_file("output/MANCHA_REAL_FINAL.shp")
+            print("✅ SUCESSO: Mancha real gerada!")
         else:
-            print("❌ ERRO: A propagação não encontrou áreas conectadas abaixo da cota.")
-            
+            # Se falhar, gera o ponto para você conferir a localização no QGIS
+            print("⚠️ RELEVO BARROU: Gerando ponto de conferência.")
+            ponto = Point(x, y)
+            gpd.GeoDataFrame(geometry=[ponto.buffer(50)], crs="EPSG:31983").to_file("output/CONFERIR_PONTO.shp")
+
     except Exception as e:
-        print(f"❌ ERRO CRÍTICO ao processar o raster: {e}")
+        print(f"❌ Erro: {e}")
 
 if __name__ == "__main__":
     main()
