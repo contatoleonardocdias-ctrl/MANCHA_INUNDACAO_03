@@ -8,13 +8,15 @@ import requests
 import os
 import sys
 from rasterio.features import shapes
+from rasterio.windows import from_bounds
 
 # --- CONFIGURAÇÃO ---
 ID_DRIVE = "1l0N_Zn4qV0JQwggbd_Wr_bTgYLcki1su" 
 MDE_LOCAL = "data/mde.tif"
 CSV_LOCAL = "barragens.csv"
 OUTPUT_DIR = "output"
-CRS_MDE = "EPSG:31983"  # 🔥 DEFINIDO MANUALMENTE
+CRS_MDE = "EPSG:31983"
+BUFFER = 3000  # 🔥 área de análise (3 km)
 # --------------------
 
 def baixar_mde(url, destino):
@@ -36,17 +38,24 @@ def processar(row):
     epsg_origem = int(row['epsg'])
 
     with rasterio.open(MDE_LOCAL) as src:
-        raster = src.read(1)
 
-        print(f"CRS original do raster: {src.crs}")
+        print(f"CRS raster: {src.crs}")
 
-        # Gera máscara
+        # 🔥 RECORTE AO REDOR DO PONTO
+        xmin, xmax = x - BUFFER, x + BUFFER
+        ymin, ymax = y - BUFFER, y + BUFFER
+
+        window = from_bounds(xmin, ymin, xmax, ymax, src.transform)
+
+        raster = src.read(1, window=window)
+        transform = src.window_transform(window)
+
+        # 🔥 MÁSCARA DE INUNDAÇÃO
         mask = (raster <= cota).astype('int16')
 
-        # Extração de polígonos
         results = (
             {'properties': {'cota': cota}, 'geometry': s}
-            for (s, v) in shapes(mask, mask=(mask == 1), transform=src.transform)
+            for (s, v) in shapes(mask, mask=(mask == 1), transform=transform)
         )
 
         features = list(results)
@@ -55,39 +64,43 @@ def processar(row):
             print(f"Aviso: Nenhuma mancha gerada para {nome}")
             return
 
-        # 🔥 CRIA GDF SEM CRS E DEFINE MANUALMENTE
+        # 🔥 GDF COM CRS CORRETO
         gdf_mancha = gpd.GeoDataFrame.from_features(features)
         gdf_mancha = gdf_mancha.set_crs(CRS_MDE)
 
-        print("CRS mancha definido como:", gdf_mancha.crs)
-
-        # --- PONTO ---
-        ponto_original = gpd.GeoDataFrame(
+        # 🔥 PONTO
+        ponto = gpd.GeoDataFrame(
             {'geometry': [Point(x, y)]}, 
             crs=f"EPSG:{epsg_origem}"
         )
 
-        # --- REPROJEÇÃO ---
+        # 🔥 REPROJEÇÃO
         gdf_mancha_3857 = gdf_mancha.to_crs(epsg=3857)
-        ponto_3857 = ponto_original.to_crs(epsg=3857)
+        ponto_3857 = ponto.to_crs(epsg=3857)
 
-        # --- OUTPUT ---
         if not os.path.exists(OUTPUT_DIR):
             os.makedirs(OUTPUT_DIR)
 
-        # Shapefile
-        shp_path = f"{OUTPUT_DIR}/Mancha_{nome}.shp"
-        gdf_mancha_3857.to_file(shp_path)
+        # 🔥 SALVA SHP
+        gdf_mancha_3857.to_file(f"{OUTPUT_DIR}/Mancha_{nome}.shp")
 
-        # PDF
+        # 🔥 MAPA
         fig, ax = plt.subplots(figsize=(12, 12))
-        gdf_mancha_3857.plot(ax=ax, color='cyan', alpha=0.5, edgecolor='blue', label='Área de Inundação')
-        ponto_3857.plot(ax=ax, color='red', marker='X', markersize=200, label='Ponto de Rompimento')
+
+        gdf_mancha_3857.plot(
+            ax=ax, color='cyan', alpha=0.5, edgecolor='blue',
+            label='Área de Inundação'
+        )
+
+        ponto_3857.plot(
+            ax=ax, color='yellow', marker='*', markersize=300,
+            label='Ponto de Ruptura'
+        )
 
         try:
             cx.add_basemap(ax, source=cx.providers.Esri.WorldImagery)
         except Exception as e:
-            print(f"Aviso: Satélite offline ({e})")
+            print(f"Basemap falhou: {e}")
 
         ax.set_title(f"Relatório de Inundação: {nome} (Cota {cota}m)")
         plt.legend()
@@ -96,7 +109,7 @@ def processar(row):
         plt.savefig(path_pdf, bbox_inches='tight')
         plt.close()
 
-        print(f"Sucesso: {path_pdf} gerado.")
+        print(f"Sucesso: {path_pdf}")
 
 if __name__ == "__main__":
     if not os.path.exists(OUTPUT_DIR):
