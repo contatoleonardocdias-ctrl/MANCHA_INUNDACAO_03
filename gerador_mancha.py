@@ -16,7 +16,7 @@ MDE_LOCAL = "data/mde.tif"
 CSV_LOCAL = "barragens.csv"
 OUTPUT_DIR = "output"
 CRS_MDE = "EPSG:31983"
-BUFFER = 3000  # 🔥 área de análise (3 km)
+BUFFER = 3000  # metros
 # --------------------
 
 def baixar_mde(url, destino):
@@ -39,18 +39,57 @@ def processar(row):
 
     with rasterio.open(MDE_LOCAL) as src:
 
-        print(f"CRS raster: {src.crs}")
+        raster_full = src.read(1)
 
-        # 🔥 RECORTE AO REDOR DO PONTO
-        xmin, xmax = x - BUFFER, x + BUFFER
-        ymin, ymax = y - BUFFER, y + BUFFER
+        # 🔥 CRS DO RASTER
+        if src.crs is None:
+            print("⚠️ CRS do raster ausente. Forçando EPSG:31983")
+            crs_raster = CRS_MDE
+        else:
+            crs_raster = src.crs
 
-        window = from_bounds(xmin, ymin, xmax, ymax, src.transform)
+        # 🔥 PONTO
+        ponto = gpd.GeoDataFrame(
+            {'geometry': [Point(x, y)]},
+            crs=f"EPSG:{epsg_origem}"
+        )
 
-        raster = src.read(1, window=window)
-        transform = src.window_transform(window)
+        # 🔥 GARANTE MESMO CRS
+        if str(ponto.crs) != str(crs_raster):
+            ponto = ponto.to_crs(crs_raster)
 
-        # 🔥 MÁSCARA DE INUNDAÇÃO
+        x_proj = ponto.geometry.iloc[0].x
+        y_proj = ponto.geometry.iloc[0].y
+
+        bounds = src.bounds
+
+        print("Bounds raster:", bounds)
+        print("Ponto:", x_proj, y_proj)
+
+        # 🔥 VERIFICA SE ESTÁ DENTRO
+        dentro = (bounds.left <= x_proj <= bounds.right and bounds.bottom <= y_proj <= bounds.top)
+
+        if dentro:
+            xmin = max(x_proj - BUFFER, bounds.left)
+            xmax = min(x_proj + BUFFER, bounds.right)
+            ymin = max(y_proj - BUFFER, bounds.bottom)
+            ymax = min(y_proj + BUFFER, bounds.top)
+
+            window = from_bounds(xmin, ymin, xmax, ymax, src.transform)
+            raster = src.read(1, window=window)
+
+            if raster.size == 0:
+                print("⚠️ Recorte vazio → usando raster completo")
+                raster = raster_full
+                transform = src.transform
+            else:
+                transform = src.window_transform(window)
+        else:
+            print("⚠️ Ponto fora do raster → usando raster completo")
+            raster = raster_full
+            transform = src.transform
+
+        # 🔥 MÁSCARA
         mask = (raster <= cota).astype('int16')
 
         results = (
@@ -64,15 +103,9 @@ def processar(row):
             print(f"Aviso: Nenhuma mancha gerada para {nome}")
             return
 
-        # 🔥 GDF COM CRS CORRETO
+        # 🔥 GDF
         gdf_mancha = gpd.GeoDataFrame.from_features(features)
-        gdf_mancha = gdf_mancha.set_crs(CRS_MDE)
-
-        # 🔥 PONTO
-        ponto = gpd.GeoDataFrame(
-            {'geometry': [Point(x, y)]}, 
-            crs=f"EPSG:{epsg_origem}"
-        )
+        gdf_mancha = gdf_mancha.set_crs(crs_raster)
 
         # 🔥 REPROJEÇÃO
         gdf_mancha_3857 = gdf_mancha.to_crs(epsg=3857)
@@ -81,7 +114,7 @@ def processar(row):
         if not os.path.exists(OUTPUT_DIR):
             os.makedirs(OUTPUT_DIR)
 
-        # 🔥 SALVA SHP
+        # 🔥 SHP
         gdf_mancha_3857.to_file(f"{OUTPUT_DIR}/Mancha_{nome}.shp")
 
         # 🔥 MAPA
@@ -100,7 +133,7 @@ def processar(row):
         try:
             cx.add_basemap(ax, source=cx.providers.Esri.WorldImagery)
         except Exception as e:
-            print(f"Basemap falhou: {e}")
+            print(f"⚠️ Basemap falhou: {e}")
 
         ax.set_title(f"Relatório de Inundação: {nome} (Cota {cota}m)")
         plt.legend()
@@ -109,7 +142,7 @@ def processar(row):
         plt.savefig(path_pdf, bbox_inches='tight')
         plt.close()
 
-        print(f"Sucesso: {path_pdf}")
+        print(f"✅ Sucesso: {path_pdf}")
 
 if __name__ == "__main__":
     if not os.path.exists(OUTPUT_DIR):
@@ -127,5 +160,5 @@ if __name__ == "__main__":
             processar(row)
 
     except Exception as e:
-        print(f"Erro fatal durante a execução: {e}")
+        print(f"❌ Erro fatal durante a execução: {e}")
         sys.exit(1)
