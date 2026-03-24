@@ -1,11 +1,12 @@
 name: Gerar Relatorio Inundacao
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Permite rodar manualmente clicando no botão
 
 jobs:
   run_script:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout do código
         uses: actions/checkout@v4
@@ -28,8 +29,10 @@ jobs:
       - name: Executar Script
         run: python gerador_mancha.py
 
-      - name: Salvar resultados
+      - name: Upload dos Produtos (SHP e PDF)
+        if: always() # Garante que tente salvar mesmo se houver avisos
         uses: actions/upload-artifact@v4
         with:
-          name: relatorios-pdf
+          name: Produtos_Inundacao
           path: output/
+          if-no-files-found: error # Faz o workflow avisar se a pasta estiver vazia
