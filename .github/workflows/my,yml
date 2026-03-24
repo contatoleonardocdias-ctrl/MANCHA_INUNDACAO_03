@@ -1,1 +1,42 @@
 
+Conversa com o Gemini
+Você disse
+como faço para rodar o scripit?
+
+O Gemini disse
+Pela imagem, você está na tela inicial de configuração do GitHub Actions para o repositório MANCHA_INUNDACAO_03. Para rodar um script de forma automática ou manual, você precisa criar um arquivo de "workflow" (fluxo de trabalho) no formato .yml.
+
+Aqui está o passo a passo para configurar e rodar o seu script:
+
+1. Criar o arquivo de configuração
+Na tela em que você está, clique na opção azul: "Configure um fluxo de trabalho você mesmo" (ou set up a workflow yourself).
+
+2. Configurar o Workflow
+O GitHub abrirá um editor de texto. Apague o conteúdo padrão e cole uma estrutura como esta (ajustando para o nome do seu script):
+
+YAML
+name: Executar Script de Mancha de Inundacao
+
+on:
+  workflow_dispatch: # Permite rodar manualmente
+  schedule:
+    - cron: '0 * * * *' # Exemplo: roda de 1 em 1 hora (opcional)
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependências
+        run: |
+          pip install -r requirements.txt
+
+      - name: Executar o script
+        run: python seu_script.py
