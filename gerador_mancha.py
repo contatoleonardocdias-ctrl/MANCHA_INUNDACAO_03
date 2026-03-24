@@ -1,35 +1,29 @@
-import rasterio 
+import rasterio
 import matplotlib.pyplot as plt
 import geopandas as gpd
 import pandas as pd
 import contextily as cx
-from shapely.geometry import Point
+from shapely.geometry import Point, box
 import requests
 import os
 import sys
 from rasterio.features import shapes
-from rasterio.windows import from_bounds
+from rasterio.mask import mask as rio_mask
 
 # --- CONFIGURAÇÃO ---
 ID_DRIVE = "1l0N_Zn4qV0JQwggbd_Wr_bTgYLcki1su" 
 MDE_LOCAL = "data/mde.tif"
 CSV_LOCAL = "barragens.csv"
 OUTPUT_DIR = "output"
-CRS_MDE = "EPSG:31983"
-BUFFER = 3000  # metros
+DISTANCIA_JUSANTE = 4000 # Extensão da análise em metros
 # --------------------
 
 def baixar_mde(url, destino):
-    if not os.path.exists('data'):
-        os.makedirs('data')
+    if not os.path.exists('data'): os.makedirs('data')
     if not os.path.exists(destino):
-        print("Iniciando download do MDE...")
         r = requests.get(url, stream=True)
-        r.raise_for_status()
         with open(destino, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
-        print("Download do MDE concluído.")
+            for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
 
 def processar(row):
     nome = str(row['nome_barragem']).strip().replace(" ", "_")
@@ -38,127 +32,54 @@ def processar(row):
     epsg_origem = int(row['epsg'])
 
     with rasterio.open(MDE_LOCAL) as src:
-
-        raster_full = src.read(1)
-
-        # 🔥 CRS DO RASTER
-        if src.crs is None:
-            print("⚠️ CRS do raster ausente. Forçando EPSG:31983")
-            crs_raster = CRS_MDE
-        else:
-            crs_raster = src.crs
-
-        # 🔥 PONTO
-        ponto = gpd.GeoDataFrame(
-            {'geometry': [Point(x, y)]},
-            crs=f"EPSG:{epsg_origem}"
-        )
-
-        # 🔥 GARANTE MESMO CRS
-        if str(ponto.crs) != str(crs_raster):
-            ponto = ponto.to_crs(crs_raster)
-
-        x_proj = ponto.geometry.iloc[0].x
-        y_proj = ponto.geometry.iloc[0].y
-
-        bounds = src.bounds
-
-        print("Bounds raster:", bounds)
-        print("Ponto:", x_proj, y_proj)
-
-        # 🔥 VERIFICA SE ESTÁ DENTRO
-        dentro = (bounds.left <= x_proj <= bounds.right and bounds.bottom <= y_proj <= bounds.top)
-
-        if dentro:
-            xmin = max(x_proj - BUFFER, bounds.left)
-            xmax = min(x_proj + BUFFER, bounds.right)
-            ymin = max(y_proj - BUFFER, bounds.bottom)
-            ymax = min(y_proj + BUFFER, bounds.top)
-
-            window = from_bounds(xmin, ymin, xmax, ymax, src.transform)
-            raster = src.read(1, window=window)
-
-            if raster.size == 0:
-                print("⚠️ Recorte vazio → usando raster completo")
-                raster = raster_full
-                transform = src.transform
-            else:
-                transform = src.window_transform(window)
-        else:
-            print("⚠️ Ponto fora do raster → usando raster completo")
-            raster = raster_full
-            transform = src.transform
-
-        # 🔥 MÁSCARA
-        mask = (raster <= cota).astype('int16')
-
-        results = (
-            {'properties': {'cota': cota}, 'geometry': s}
-            for (s, v) in shapes(mask, mask=(mask == 1), transform=transform)
-        )
-
-        features = list(results)
-
-        if not features:
-            print(f"Aviso: Nenhuma mancha gerada para {nome}")
-            return
-
-        # 🔥 GDF
-        gdf_mancha = gpd.GeoDataFrame.from_features(features)
-        gdf_mancha = gdf_mancha.set_crs(crs_raster)
-
-        # 🔥 REPROJEÇÃO
-        gdf_mancha_3857 = gdf_mancha.to_crs(epsg=3857)
-        ponto_3857 = ponto.to_crs(epsg=3857)
-
-        if not os.path.exists(OUTPUT_DIR):
-            os.makedirs(OUTPUT_DIR)
-
-        # 🔥 SHP
-        gdf_mancha_3857.to_file(f"{OUTPUT_DIR}/Mancha_{nome}.shp")
-
-        # 🔥 MAPA
-        fig, ax = plt.subplots(figsize=(12, 12))
-
-        gdf_mancha_3857.plot(
-            ax=ax, color='cyan', alpha=0.5, edgecolor='blue',
-            label='Área de Inundação'
-        )
-
-        ponto_3857.plot(
-            ax=ax, color='yellow', marker='*', markersize=300,
-            label='Ponto de Ruptura'
-        )
-
+        # Define área de estudo focada na jusante (abaixo da barragem)
+        area_estudo = box(x - 1000, y - DISTANCIA_JUSANTE, x + 1000, y + 1000)
+        
         try:
-            cx.add_basemap(ax, source=cx.providers.Esri.WorldImagery)
-        except Exception as e:
-            print(f"⚠️ Basemap falhou: {e}")
+            out_image, out_transform = rio_mask(src, [area_estudo], crop=True)
+            raster = out_image[0]
+        except: return
 
-        ax.set_title(f"Relatório de Inundação: {nome} (Cota {cota}m)")
-        plt.legend()
+        # Gera mancha detalhada
+        mask_inundacao = ((raster <= cota) & (raster > -100)).astype('int16')
+        results = ({'properties': {'cota': cota}, 'geometry': s}
+                   for i, (s, v) in enumerate(shapes(mask_inundacao, mask=(mask_inundacao == 1), transform=out_transform)))
+        
+        gdf_mancha = gpd.GeoDataFrame.from_features(list(results), crs=src.crs)
+        if gdf_mancha.empty: return
 
-        path_pdf = f"{OUTPUT_DIR}/Mapa_{nome}.pdf"
-        plt.savefig(path_pdf, bbox_inches='tight')
+        # Reprojeção para Satélite
+        ponto_gdf = gpd.GeoDataFrame({'geometry': [Point(x, y)]}, crs=f"EPSG:{epsg_origem}").to_crs(epsg=3857)
+        gdf_mancha_3857 = gdf_mancha.to_crs(epsg=3857)
+
+        # --- PLOTAGEM ESTILO SP ÁGUAS ---
+        fig, ax = plt.subplots(figsize=(15, 10))
+        
+        # Mancha com preenchimento suave e borda forte (estilo técnico)
+        gdf_mancha_3857.plot(ax=ax, color='#00FFFF', alpha=0.4, label='Mancha de inundação')
+        gdf_mancha_3857.boundary.plot(ax=ax, color='blue', linewidth=0.8)
+        
+        # Ponto do Barramento (Pin vermelho)
+        ponto_3857 = ponto_gdf.geometry.iloc[0]
+        ax.scatter(ponto_3857.x, ponto_3857.y, color='red', edgecolor='white', s=150, marker='o', label='Barramento', zorder=10)
+
+        # Mapa de Fundo de Alta Resolução
+        try:
+            cx.add_basemap(ax, source=cx.providers.Esri.WorldImagery, zoom=15)
+        except: pass
+
+        # Ajuste de Layout (Sem eixos e com título limpo)
+        ax.set_axis_off()
+        plt.title(f"Simulação de Dam Break - {nome.replace('_', ' ')}", fontsize=16, pad=20)
+        plt.legend(loc='upper right', frameon=True)
+
+        if not os.path.exists(OUTPUT_DIR): os.makedirs(OUTPUT_DIR)
+        plt.savefig(f"{OUTPUT_DIR}/Mapa_{nome}.pdf", bbox_inches='tight', dpi=300)
         plt.close()
-
-        print(f"✅ Sucesso: {path_pdf}")
+        print(f"✅ Mapa de alta definição gerado para {nome}")
 
 if __name__ == "__main__":
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
-
-    url = f"https://docs.google.com/uc?export=download&id={ID_DRIVE}"
-    
-    try:
-        baixar_mde(url, MDE_LOCAL)
-
-        df = pd.read_csv(CSV_LOCAL)
-        df.columns = df.columns.str.strip().str.lower()
-
-        for _, row in df.iterrows():
-            processar(row)
-
-    except Exception as e:
-        print(f"❌ Erro fatal durante a execução: {e}")
-        sys.exit(1)
+    baixar_mde(f"https://docs.google.com/uc?export=download&id={ID_DRIVE}", MDE_LOCAL)
+    df = pd.read_csv(CSV_LOCAL)
+    df.columns = df.columns.str.strip().str.lower()
+    for _, row in df.iterrows(): processar(row)
