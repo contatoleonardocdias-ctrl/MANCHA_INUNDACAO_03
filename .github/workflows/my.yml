@@ -19,11 +19,14 @@ jobs:
       - name: Bibliotecas
         run: |
           pip install --upgrade pip
-          pip install rasterio geopandas pandas requests scipy shapely fiona
+          # Adicionado gdown para o download do Google Drive
+          pip install rasterio geopandas pandas requests scipy shapely fiona gdown
 
       - name: Executar
         run: |
           mkdir -p output
+          # O gdown precisa que o arquivo de destino não exista para baixar limpo
+          rm -f mde_final_utm.tif 
           python gerador_mancha.py
 
       - name: Download Resultado
