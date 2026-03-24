@@ -1,7 +1,7 @@
-name: Gerar Mancha SHP Refinada
+name: Gerar Mancha Estavel
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Botão para rodar manualmente na aba Actions
 
 jobs:
   run_analysis:
@@ -25,17 +25,19 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install wheel
-          pip install rasterio geopandas pandas requests fiona shapely pysheds scipy scikit-image
+          # Bibliotecas padrão e estáveis de geoprocessamento
+          pip install rasterio geopandas pandas requests fiona shapely scipy
 
-      - name: Executar Script
+      - name: Executar Gerador de Mancha
         run: |
+          # Garante que a pasta output exista
           mkdir -p output
           python gerador_mancha.py
 
-      - name: Upload dos Resultados
-        if: always()
+      - name: Upload dos Resultados (Shapefile)
+        if: always() # Faz o upload mesmo se o script Python der erro, para análise
         uses: actions/upload-artifact@v4
         with:
-          name: Mancha_Inundacao_Refinada
-          path: output/
+          name: Mancha_Inundacao_Resultado
+          path: output/ # Pasta onde o SHP foi salvo
           if-no-files-found: error
