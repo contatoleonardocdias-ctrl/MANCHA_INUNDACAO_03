@@ -1,4 +1,4 @@
-name: Gerar Mancha de Inundacao
+name: Gerar Relatorio Inundacao
 
 on:
   workflow_dispatch:
@@ -24,13 +24,13 @@ jobs:
       - name: Instalar bibliotecas Python
         run: |
           pip install --upgrade pip
-          pip install rasterio geopandas pandas requests fiona pyproj
+          pip install rasterio geopandas pandas requests fiona pyproj matplotlib contextily shapely
 
       - name: Executar Script
         run: python gerador_mancha.py
 
-      - name: Salvar resultados
+      - name: Salvar resultados (Relatorios)
         uses: actions/upload-artifact@v4
         with:
-          name: manchas-geradas
+          name: relatorios-inundacao
           path: output/
