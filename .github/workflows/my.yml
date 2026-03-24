@@ -6,7 +6,6 @@ on:
 jobs:
   run_script:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout do código
         uses: actions/checkout@v4
@@ -24,13 +23,13 @@ jobs:
       - name: Instalar bibliotecas Python
         run: |
           pip install --upgrade pip
-          pip install rasterio geopandas pandas requests fiona pyproj matplotlib contextily shapely
+          pip install rasterio geopandas pandas requests fiona pyproj matplotlib contextily shapely pyyaml
 
       - name: Executar Script
         run: python gerador_mancha.py
 
-      - name: Salvar resultados (Relatorios)
+      - name: Salvar resultados
         uses: actions/upload-artifact@v4
         with:
-          name: relatorios-inundacao
+          name: relatorios-pdf
           path: output/
