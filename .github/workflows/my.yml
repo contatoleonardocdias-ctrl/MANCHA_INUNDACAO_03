@@ -1,4 +1,4 @@
-name: Gerar Mancha Inundacao
+name: Gerar Mancha Estavel
 
 on:
   workflow_dispatch:
@@ -8,28 +8,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout código
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Instalar Dependencias
+      - name: Bibliotecas
         run: |
           pip install --upgrade pip
           pip install rasterio geopandas pandas requests scipy shapely fiona
 
-      - name: Executar Script
+      - name: Executar
         run: |
           mkdir -p output
           python gerador_mancha.py
 
-      - name: Upload do Shapefile
+      - name: Download Resultado
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Mancha_Resultado
+          name: Mancha_SHP
           path: output/
-          if-no-files-found: error
