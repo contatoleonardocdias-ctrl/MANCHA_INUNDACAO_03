@@ -9,6 +9,7 @@ import requests
 from pysheds.grid import Grid
 from rasterio.crs import CRS
 
+# Configurações do Google Drive
 FILE_ID = "1l0N_Zn4qV0JQwggbd_Wr_bTgYLcki1su"
 MDE_NOME = "23S48_ZN.tif"
 OUTPUT_NAME = "MANCHA_REFINADA_FINAL"
@@ -25,6 +26,7 @@ def download_mde(id, destination):
         print("Download concluído.")
 
 def main():
+    # 1. Preparação dos Dados
     download_mde(FILE_ID, MDE_NOME)
     df = pd.read_csv('barragens.csv')
     row = df.iloc[0]
@@ -32,31 +34,39 @@ def main():
     cota_ruptura = row['cota_ruptura']
     epsg_alvo = int(row['epsg'])
 
-    print(f"Processando ruptura na cota {cota_ruptura}m para EPSG {epsg_alvo}...")
+    print(f"Processando: Cota {cota_ruptura}m | EPSG {epsg_alvo}")
 
-    # Forçar o CRS para evitar o erro de projeção anterior
+    # Forçar CRS no arquivo original para evitar erro de cabeçalho
     with rasterio.open(MDE_NOME, 'r+') as rst:
         rst.crs = CRS.from_epsg(epsg_alvo)
     
+    # 2. Processamento Hidrológico com PySheds
     grid = Grid.from_raster(MDE_NOME, data_name='dem')
     
-    # CORREÇÃO AQUI: Passando o argumento 'dem' para o fill_pits
-    print("Preenchendo depressões...")
-    grid.fill_pits(data='dem', out_name='flooded_dem')
-    grid.fill_depressions(data='flooded_dem', out_name='final_dem')
+    print("Preenchendo depressões (Pits & Depressions)...")
+    # Correção da sintaxe: passando 'dem' como primeiro argumento
+    grid.fill_pits('dem', out_name='flooded_dem')
+    grid.fill_depressions('flooded_dem', out_name='final_dem')
     
     print("Calculando direções de fluxo...")
-    grid.flowdir(data='final_dem', out_name='dir')
+    grid.flowdir('final_dem', out_name='dir')
     
-    # Rastreio a Jusante para garantir que siga o rio
+    # 3. Rastreio a Jusante (Downstream Trace)
+    # Isso garante que a mancha siga o leito (linha laranja) e ignore o reservatório
     print("Rastreando fluxo a jusante...")
+    # O trace_downstream cria o caminho preferencial da água
     out_trace = grid.trace_downstream(x=x, y=y, data='dir', max_steps=5000)
     
+    # 4. Criação da Mancha de Inundação
     dem_data = grid.view('final_dem')
-    # Lógica: Abaixo da cota E conectado ao fluxo de descida
+    
+    # Lógica: Inunda se (Cota <= Ruptura) E (Está na rota de descida do fluxo)
+    # Convertemos out_trace para booleano (onde passou água é True)
     mancha_mask = (dem_data <= cota_ruptura) & (out_trace > 0)
     
+    # 5. Vetorização e Salvamento
     transform = grid.view('dem').transform
+    # Transformar pixels True em polígonos
     resultados = (
         {'properties': {'id': 1}, 'geometry': s}
         for i, (s, v) in enumerate(shapes(mancha_mask.astype('int16'), 
@@ -68,13 +78,16 @@ def main():
     
     if geometrias:
         if not os.path.exists('output'): os.makedirs('output')
+        
         gdf = gpd.GeoDataFrame(geometry=geometrias, crs=f"EPSG:{epsg_alvo}")
+        # Dissolve para unificar em um único objeto (estilo a imagem de Ituverava)
         gdf_dissolved = gdf.dissolve() 
+        
         output_path = f"output/{OUTPUT_NAME}.shp"
         gdf_dissolved.to_file(output_path)
-        print(f"Sucesso! Arquivo gerado em: {output_path}")
+        print(f"SUCESSO: Arquivo gerado em {output_path}")
     else:
-        print("Erro: Nenhuma mancha gerada. Verifique se as coordenadas X/Y estão dentro do MDE.")
+        print("ERRO: Nenhuma mancha gerada. Verifique se o ponto X,Y está correto no MDE.")
 
 if __name__ == "__main__":
     main()
