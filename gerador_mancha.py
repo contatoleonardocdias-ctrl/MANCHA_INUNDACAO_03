@@ -8,22 +8,24 @@ from scipy.ndimage import binary_dilation
 import os
 import requests
 
-# ATENÇÃO: Verifique se o ID e o NOME do arquivo no Drive estão corretos
+# Link do seu MDE (Certifique-se que o ID está correto se você mudou o arquivo)
 FILE_ID = "1l0N_Zn4qV0JQwggbd_Wr_bTgYLcki1su"
 MDE_NOME = "mde_final_31983.tif" 
 
 def download_mde(id, destination):
-    print(f"Baixando arquivo do Drive: {id}...")
+    print(f"Baixando arquivo do Drive...")
     url = f"https://docs.google.com/uc?export=download&id={id}"
-    r = requests.get(url, stream=True)
+    session = requests.Session()
+    response = session.get(url, stream=True)
     with open(destination, "wb") as f:
-        for chunk in r.iter_content(32768): f.write(chunk)
+        for chunk in response.iter_content(32768):
+            if chunk: f.write(chunk)
     print("Download concluído.")
 
 def main():
     download_mde(FILE_ID, MDE_NOME)
     
-    # 1. Leitura do CSV com tratamento de erro
+    # Lendo o CSV
     try:
         df = pd.read_csv('barragens.csv')
         row = df.iloc[0]
@@ -31,56 +33,62 @@ def main():
         cota_ruptura = float(row['cota_ruptura'])
         epsg_csv = int(row['epsg'])
     except Exception as e:
-        print(f"ERRO ao ler o CSV: {e}")
+        print(f"Erro no CSV: {e}")
         return
 
-    # 2. Processamento
+    # Abrindo o MDE
     with rasterio.open(MDE_NOME) as src:
-        print(f"--- INFO DO MAPA ---")
-        print(f"Sistema (CRS): {src.crs}")
-        print(f"Limites (Bounds): {src.bounds}")
-        
-        # Converte coordenada para pixel
+        # Pega a posição do pixel
         py, px = src.index(x, y)
-        print(f"Tentando iniciar no Pixel: Linha {py}, Coluna {px}")
-
-        # VALIDAÇÃO CRÍTICA
+        
+        # VERIFICAÇÃO DE SEGURANÇA: O ponto está no mapa?
         if py < 0 or py >= src.height or px < 0 or px >= src.width:
-            print(f"❌ ERRO: O ponto ({x}, {y}) está FORA dos limites do mapa!")
-            print(f"Verifique se o X e Y no CSV estão corretos para o EPSG {epsg_csv}.")
+            print(f"❌ ERRO: O ponto ({x}, {y}) está fora do mapa!")
+            print(f"Limites do mapa: {src.bounds}")
             return
 
         raster = src.read(1)
-        # Se o pixel de início for NoData, a inundação não começa
-        if raster[py, px] == src.nodata:
-            print(f"❌ ERRO: O ponto de início caiu em uma área sem dados (NoData).")
-            return
+        nodata = src.nodata
+        
+        # Criar máscara de cota: tudo que é menor ou igual a 745m
+        # E que não seja o valor de NoData (vazio)
+        mask_cota = (raster <= cota_ruptura) & (raster != nodata)
 
-        # Lógica de Inundação
-        mask_cota = (raster <= cota_ruptura) & (raster != src.nodata)
+        # Lógica de inundação conectada (Flood Fill)
+        # Começamos apenas no pixel do barramento e 'espalhamos' a água
         seed = np.zeros_like(mask_cota, dtype=bool)
         seed[py, px] = True
+        
         inundacao = np.zeros_like(mask_cota, dtype=bool)
         
-        print("Propagando mancha pelo vale...")
-        for i in range(2000): # Aumentado para garantir alcance
+        print("Propagando mancha...")
+        # 1500 iterações cobrem aproximadamente 45km em MDE de 30m
+        for i in range(1500):
+            # Expande a área inundada atual por 1 pixel
             expandida = binary_dilation(seed, structure=np.ones((3,3)))
+            # A nova área inundada é a expansão limitada pela cota
             seed = expandida & mask_cota
+            
             if not seed.any(): break
             inundacao |= seed
 
-        # Vetorização
-        geoms = [shape(s) for s, v in shapes(inundacao.astype('int16'), 
+        # Transformar o resultado em Polígono (Vetor)
+        results = (
+            {'properties': {'id': 1}, 'geometry': s}
+            for i, (s, v) in enumerate(shapes(inundacao.astype('int16'), 
                                              mask=inundacao==1, 
-                                             transform=src.transform)]
+                                             transform=src.transform))
+        )
+        geometrias = [shape(res['geometry']) for res in results]
 
-    if geoms:
-        os.makedirs('output', exist_ok=True)
-        gdf = gpd.GeoDataFrame(geometry=geoms, crs=f"EPSG:{epsg_csv}")
+    if geometrias:
+        if not os.path.exists('output'): os.makedirs('output')
+        gdf = gpd.GeoDataFrame(geometry=geometrias, crs=f"EPSG:{epsg_csv}")
+        # Dissolve para virar uma mancha única e limpa
         gdf.dissolve().to_file("output/MANCHA_FINAL.shp")
-        print("✅ SUCESSO: Arquivo gerado em output/MANCHA_FINAL.shp")
+        print("✅ SUCESSO: Mancha gerada em output/MANCHA_FINAL.shp")
     else:
-        print("❌ ERRO: O algoritmo rodou mas não encontrou áreas para inundar. A cota de ruptura é menor que a cota do terreno no ponto?")
+        print("❌ ERRO: A inundação não conseguiu começar. Verifique a cota no CSV.")
 
 if __name__ == "__main__":
     main()
