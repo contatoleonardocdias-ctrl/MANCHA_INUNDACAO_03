@@ -1,13 +1,12 @@
-name: Executar Script de Mancha de Inundacao
+name: Gerar Mancha de Inundacao
 
 on:
-  workflow_dispatch: # Permite rodar manualmente
-  schedule:
-    - cron: '0 * * * *' # Exemplo: roda de 1 em 1 hora (opcional)
+  workflow_dispatch: # Permite rodar manualmente clicando no botão
 
 jobs:
-  build:
+  run_script:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout do código
         uses: actions/checkout@v4
@@ -16,10 +15,23 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip'
 
-      - name: Instalar dependências
+      - name: Instalar dependências do sistema
         run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev
+
+      - name: Instalar bibliotecas Python
+        run: |
+          pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Executar o script
-        run: python seu_script.py  # Substitua pelo nome real do seu arquivo .py
+      - name: Executar Script de Inundação
+        run: python seu_script.py  # <-- Substitua pelo nome exato do seu arquivo .py
+
+      - name: Salvar resultados (Upload)
+        uses: actions/upload-artifact@v4
+        with:
+          name: manchas-geradas
+          path: output/
