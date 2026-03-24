@@ -1,4 +1,4 @@
-name: Gerar Relatorio Inundacao
+name: Gerar Mancha SHP
 
 on:
   workflow_dispatch: # Permite rodar manualmente clicando no botão
@@ -24,15 +24,15 @@ jobs:
       - name: Instalar bibliotecas Python
         run: |
           pip install --upgrade pip
-          pip install rasterio geopandas pandas requests fiona pyproj matplotlib contextily shapely pyyaml
+          pip install rasterio geopandas pandas requests fiona shapely
 
       - name: Executar Script
         run: python gerador_mancha.py
 
-      - name: Upload dos Produtos (SHP e PDF)
-        if: always() # Garante que tente salvar mesmo se houver avisos
+      - name: Upload dos Produtos (Apenas SHP)
+        if: always() 
         uses: actions/upload-artifact@v4
         with:
-          name: Produtos_Inundacao
+          name: Produtos_Inundacao_SHP
           path: output/
-          if-no-files-found: error # Faz o workflow avisar se a pasta estiver vazia
+          if-no-files-found: error
