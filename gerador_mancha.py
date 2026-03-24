@@ -26,64 +26,67 @@ def baixar_mde(url, destino):
             for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
 
 def processar(row):
-    # Ajustado para as colunas do seu print: nome_barragem, x_utm, y_utm, epsg, cota_ruptura
     nome = str(row['nome_barragem']).strip().replace(" ", "_")
     cota = float(row['cota_ruptura'])
-    x = float(row['x_utm'])
-    y = float(row['y_utm'])
-    crs_origem = f"EPSG:{int(row['epsg'])}"
+    x, y = float(row['x_utm']), float(row['y_utm'])
+    
+    # Define o código EPSG de forma robusta
+    epsg_cod = int(row['epsg'])
+    crs_origem = f"EPSG:{epsg_cod}"
 
     with rasterio.open(MDE_LOCAL) as src:
         raster = src.read(1)
         mask = (raster <= cota).astype('int16')
         
-        # Vetorização da mancha
+        # Vetorização com tratamento de CRS
         results = ({'properties': {'cota': cota}, 'geometry': s}
                    for i, (s, v) in enumerate(shapes(mask, mask=(mask == 1), transform=src.transform)))
         
+        # Correção aqui: Define o CRS do MDE no momento da criação
         gdf = gpd.GeoDataFrame.from_features(list(results), crs=src.crs)
         
         if gdf.empty:
-            print(f"Aviso: Nenhuma área abaixo da cota {cota} para {nome}.")
+            print(f"Aviso: Nenhuma mancha para {nome}")
             return
 
-        # Converte para Web Mercator (EPSG:3857) para o mapa de satélite
+        # Converte para Web Mercator (EPSG:3857) para o satélite
         gdf = gdf.to_crs(epsg=3857)
-        ponto = gpd.GeoDataFrame({'geometry': [Point(x, y)]}, crs=crs_origem).to_crs(epsg=3857)
+        
+        # CRIAÇÃO DO PONTO COM CRS EXPLÍCITO (Resolve o erro do log)
+        ponto = gpd.GeoDataFrame(
+            {'geometry': [Point(x, y)]}, 
+            crs=crs_origem  # Define antes de transformar
+        ).to_crs(epsg=3857)
 
-        # 1. SALVAR SHAPEFILE (O produto bruto)
+        # GERAÇÃO DOS ARQUIVOS
         if not os.path.exists(OUTPUT_DIR): os.makedirs(OUTPUT_DIR)
-        base_path = f"{OUTPUT_DIR}/Inundacao_{nome}"
-        gdf.to_file(f"{base_path}.shp")
+        
+        # Salva Shapefile
+        gdf.to_file(f"{OUTPUT_DIR}/Mancha_{nome}.shp")
 
-        # 2. GERAR PDF (O relatório visual com satélite)
+        # Salva PDF com Satélite
         fig, ax = plt.subplots(figsize=(12, 12))
-        gdf.plot(ax=ax, color='cyan', alpha=0.5, edgecolor='blue', label='Mancha de Inundação')
+        gdf.plot(ax=ax, color='cyan', alpha=0.5, edgecolor='blue', label='Mancha')
         ponto.plot(ax=ax, color='red', marker='X', markersize=200, label='Ponto de Rompimento')
         
         try:
             cx.add_basemap(ax, source=cx.providers.Esri.WorldImagery)
         except:
-            print("Erro ao carregar satélite, gerando sem fundo.")
+            print("Aviso: Satélite não disponível.")
 
-        ax.set_title(f"Mapa de Inundação: {nome}\nCota de Corte: {cota}m", fontsize=15)
+        ax.set_title(f"Inundação: {nome} (Cota {cota}m)")
         plt.legend()
-        
-        pdf_path = f"{OUTPUT_DIR}/Mapa_{nome}.pdf"
-        plt.savefig(pdf_path, bbox_inches='tight')
+        plt.savefig(f"{OUTPUT_DIR}/Mapa_{nome}.pdf", bbox_inches='tight')
         plt.close()
-        print(f"Sucesso: Arquivos gerados para {nome}")
+        print(f"Sucesso: {nome}")
 
 if __name__ == "__main__":
     if not os.path.exists(OUTPUT_DIR): os.makedirs(OUTPUT_DIR)
     url = f"https://docs.google.com/uc?export=download&id={ID_DRIVE}"
-    
     try:
         baixar_mde(url, MDE_LOCAL)
         df = pd.read_csv(CSV_LOCAL)
-        # Limpa nomes de colunas para evitar erros de espaço ou maiúsculas
         df.columns = df.columns.str.strip().str.lower()
-        
         for _, row in df.iterrows():
             processar(row)
     except Exception as e:
