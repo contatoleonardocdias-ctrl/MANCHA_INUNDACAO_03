@@ -7,9 +7,8 @@ from rasterio.features import shapes
 import os
 import requests
 from pysheds.grid import Grid
-from rasterio.crs import CRS # Importe para forçar o CRS
+from rasterio.crs import CRS
 
-# Configurações do Google Drive
 FILE_ID = "1l0N_Zn4qV0JQwggbd_Wr_bTgYLcki1su"
 MDE_NOME = "23S48_ZN.tif"
 OUTPUT_NAME = "MANCHA_REFINADA_FINAL"
@@ -35,23 +34,26 @@ def main():
 
     print(f"Processando ruptura na cota {cota_ruptura}m para EPSG {epsg_alvo}...")
 
-    # --- AJUSTE PARA CORRIGIR O ERRO DE PROJEÇÃO ---
-    # Vamos abrir o raster e forçar o CRS correto antes de passar para o PySheds
+    # Forçar o CRS para evitar o erro de projeção anterior
     with rasterio.open(MDE_NOME, 'r+') as rst:
         rst.crs = CRS.from_epsg(epsg_alvo)
     
-    # Agora o PySheds conseguirá ler sem o erro 'unrecognized format'
     grid = Grid.from_raster(MDE_NOME, data_name='dem')
     
-    # Restante do processamento hidrológico
+    # CORREÇÃO AQUI: Passando o argumento 'dem' para o fill_pits
+    print("Preenchendo depressões...")
     grid.fill_pits(data='dem', out_name='flooded_dem')
     grid.fill_depressions(data='flooded_dem', out_name='final_dem')
+    
+    print("Calculando direções de fluxo...")
     grid.flowdir(data='final_dem', out_name='dir')
     
-    # Rastreio a Jusante (Evita inundar o reservatório montante)
+    # Rastreio a Jusante para garantir que siga o rio
+    print("Rastreando fluxo a jusante...")
     out_trace = grid.trace_downstream(x=x, y=y, data='dir', max_steps=5000)
     
     dem_data = grid.view('final_dem')
+    # Lógica: Abaixo da cota E conectado ao fluxo de descida
     mancha_mask = (dem_data <= cota_ruptura) & (out_trace > 0)
     
     transform = grid.view('dem').transform
@@ -72,7 +74,7 @@ def main():
         gdf_dissolved.to_file(output_path)
         print(f"Sucesso! Arquivo gerado em: {output_path}")
     else:
-        print("Erro: Nenhuma mancha gerada. Verifique as cotas e o ponto de inserção.")
+        print("Erro: Nenhuma mancha gerada. Verifique se as coordenadas X/Y estão dentro do MDE.")
 
 if __name__ == "__main__":
     main()
