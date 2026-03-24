@@ -14,12 +14,14 @@ CSV_LOCAL = "barragens.csv"
 OUTPUT_DIR = "output"
 # --------------------
 
+# Cria a pasta de saída para o GitHub Actions encontrar
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
 
 def baixar_mde(url, destino):
     if not os.path.exists('data'): os.makedirs('data')
     if not os.path.exists(destino):
+        print("Baixando MDE...")
         r = requests.get(url, stream=True)
         r.raise_for_status()
         with open(destino, 'wb') as f:
@@ -35,39 +37,36 @@ def processar(row):
 
     try:
         with rasterio.open(MDE_LOCAL) as src:
-            area_foco = box(x - 2500, y - 6000, x + 2500, y + 2000)
+            # Define a janela de processamento ao redor do ponto
+            area_foco = box(x - 2000, y - 5000, x + 2000, y + 2000)
             out_image, out_transform = rio_mask(src, [area_foco], crop=True)
             raster = out_image[0]
             
+            # Extrai a geometria da mancha (vetorização)
             mask = ((raster <= cota) & (raster > 0)).astype('int16')
-            results = ({'properties': {'cota': cota, 'barragem': nome}, 'geometry': s}
+            results = ({'properties': {'cota': cota, 'nome': nome}, 'geometry': s}
                        for i, (s, v) in enumerate(shapes(mask, mask=(mask == 1), transform=out_transform)))
             
-            # Cria o GeoDataFrame amarrado ao CRS do MDE
+            # Cria o GeoDataFrame usando o CRS original do MDE
             gdf_mancha = gpd.GeoDataFrame.from_features(list(results), crs=src.crs)
             
             if gdf_mancha.empty:
-                print(f"⚠️ Mancha vazia para {nome}. Verifique a cota {cota}.")
+                print(f"⚠️ Nenhuma área encontrada para a cota {cota} em {nome}.")
                 return
 
-            # --- EXPORTAÇÃO PARA SHAPEFILE ---
-            # O nome do arquivo será baseado na barragem (ex: Mancha_Genesis_I.shp)
+            # SALVAMENTO DO SHAPEFILE
+            # O geopandas criará os arquivos .shp, .dbf, .prj e .shx automaticamente
             caminho_shp = os.path.join(OUTPUT_DIR, f"Mancha_{nome}.shp")
-            
-            # Salva o SHP (isso gera os arquivos .shp, .shx, .dbf e .prj)
             gdf_mancha.to_file(caminho_shp, driver='ESRI Shapefile')
             
-            print(f"✅ Shapefile gerado com sucesso: {caminho_shp}")
+            print(f"✅ Shapefile gerado: {caminho_shp}")
 
     except Exception as e:
-        print(f"❌ Erro ao gerar SHP para {nome}: {e}")
+        print(f"❌ Erro ao processar {nome}: {e}")
 
 if __name__ == "__main__":
-    try:
-        baixar_mde(f"https://docs.google.com/uc?export=download&id={ID_DRIVE}", MDE_LOCAL)
-        df = pd.read_csv(CSV_LOCAL)
-        df.columns = df.columns.str.strip().str.lower()
-        for _, row in df.iterrows():
-            processar(row)
-    except Exception as e:
-        print(f"Erro ao iniciar: {e}")
+    baixar_mde(f"https://docs.google.com/uc?export=download&id={ID_DRIVE}", MDE_LOCAL)
+    df = pd.read_csv(CSV_LOCAL)
+    df.columns = df.columns.str.strip().str.lower()
+    for _, row in df.iterrows():
+        processar(row)
