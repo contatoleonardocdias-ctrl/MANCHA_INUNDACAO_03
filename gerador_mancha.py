@@ -15,13 +15,15 @@ ID_DRIVE = "1l0N_Zn4qV0JQwggbd_Wr_bTgYLcki1su"
 MDE_LOCAL = "data/mde.tif"
 CSV_LOCAL = "barragens.csv"
 OUTPUT_DIR = "output"
-DISTANCIA_JUSANTE = 4000 # Extensão da análise em metros
+DISTANCIA_VALE = 4000 # 4km a jusante
 # --------------------
 
 def baixar_mde(url, destino):
     if not os.path.exists('data'): os.makedirs('data')
     if not os.path.exists(destino):
+        print("Baixando MDE...")
         r = requests.get(url, stream=True)
+        r.raise_for_status()
         with open(destino, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
 
@@ -32,54 +34,61 @@ def processar(row):
     epsg_origem = int(row['epsg'])
 
     with rasterio.open(MDE_LOCAL) as src:
-        # Define área de estudo focada na jusante (abaixo da barragem)
-        area_estudo = box(x - 1000, y - DISTANCIA_JUSANTE, x + 1000, y + 1000)
+        # 1. Cria área de foco para evitar pegar o oceano ou o continente todo
+        area_foco = box(x - 1500, y - DISTANCIA_VALE, x + 1500, y + 1000)
         
         try:
-            out_image, out_transform = rio_mask(src, [area_estudo], crop=True)
+            out_image, out_transform = rio_mask(src, [area_foco], crop=True)
             raster = out_image[0]
-        except: return
+        except Exception as e:
+            print(f"Ponto {nome} fora do MDE: {e}")
+            return
 
-        # Gera mancha detalhada
-        mask_inundacao = ((raster <= cota) & (raster > -100)).astype('int16')
+        # 2. Gera mancha (filtra valores nulos e acima da cota)
+        mask_inundacao = ((raster <= cota) & (raster > 0)).astype('int16')
         results = ({'properties': {'cota': cota}, 'geometry': s}
                    for i, (s, v) in enumerate(shapes(mask_inundacao, mask=(mask_inundacao == 1), transform=out_transform)))
         
+        # 3. Garante o CRS no momento da criação para evitar erro "naive"
         gdf_mancha = gpd.GeoDataFrame.from_features(list(results), crs=src.crs)
-        if gdf_mancha.empty: return
+        
+        if gdf_mancha.empty:
+            print(f"Nenhuma mancha para {nome}")
+            return
 
-        # Reprojeção para Satélite
+        # 4. Reprojeção para Satélite
         ponto_gdf = gpd.GeoDataFrame({'geometry': [Point(x, y)]}, crs=f"EPSG:{epsg_origem}").to_crs(epsg=3857)
         gdf_mancha_3857 = gdf_mancha.to_crs(epsg=3857)
 
-        # --- PLOTAGEM ESTILO SP ÁGUAS ---
-        fig, ax = plt.subplots(figsize=(15, 10))
+        # 5. Plotagem Profissional
+        fig, ax = plt.subplots(figsize=(16, 10))
+        gdf_mancha_3857.plot(ax=ax, color='#00FFFF', alpha=0.45, label='Mancha de Inundação')
+        gdf_mancha_3857.boundary.plot(ax=ax, color='blue', linewidth=0.6)
         
-        # Mancha com preenchimento suave e borda forte (estilo técnico)
-        gdf_mancha_3857.plot(ax=ax, color='#00FFFF', alpha=0.4, label='Mancha de inundação')
-        gdf_mancha_3857.boundary.plot(ax=ax, color='blue', linewidth=0.8)
-        
-        # Ponto do Barramento (Pin vermelho)
-        ponto_3857 = ponto_gdf.geometry.iloc[0]
-        ax.scatter(ponto_3857.x, ponto_3857.y, color='red', edgecolor='white', s=150, marker='o', label='Barramento', zorder=10)
+        ponto_geom = ponto_gdf.geometry.iloc[0]
+        ax.scatter(ponto_geom.x, ponto_geom.y, color='red', edgecolor='white', s=180, zorder=10, label='Barramento')
 
-        # Mapa de Fundo de Alta Resolução
         try:
-            cx.add_basemap(ax, source=cx.providers.Esri.WorldImagery, zoom=15)
+            cx.add_basemap(ax, source=cx.providers.Esri.WorldImagery, zoom=16)
         except: pass
 
-        # Ajuste de Layout (Sem eixos e com título limpo)
         ax.set_axis_off()
-        plt.title(f"Simulação de Dam Break - {nome.replace('_', ' ')}", fontsize=16, pad=20)
-        plt.legend(loc='upper right', frameon=True)
+        plt.title(f"Simulação de Dam Break: {nome.replace('_', ' ')}\nItuverava - SP", fontsize=15, pad=10)
+        plt.legend()
 
         if not os.path.exists(OUTPUT_DIR): os.makedirs(OUTPUT_DIR)
         plt.savefig(f"{OUTPUT_DIR}/Mapa_{nome}.pdf", bbox_inches='tight', dpi=300)
         plt.close()
-        print(f"✅ Mapa de alta definição gerado para {nome}")
+        print(f"✅ Sucesso: {nome}")
 
 if __name__ == "__main__":
-    baixar_mde(f"https://docs.google.com/uc?export=download&id={ID_DRIVE}", MDE_LOCAL)
-    df = pd.read_csv(CSV_LOCAL)
-    df.columns = df.columns.str.strip().str.lower()
-    for _, row in df.iterrows(): processar(row)
+    if not os.path.exists(OUTPUT_DIR): os.makedirs(OUTPUT_DIR)
+    url_mde = f"https://docs.google.com/uc?export=download&id={ID_DRIVE}"
+    try:
+        baixar_mde(url_mde, MDE_LOCAL)
+        df = pd.read_csv(CSV_LOCAL)
+        df.columns = df.columns.str.strip().str.lower()
+        for _, row in df.iterrows():
+            processar(row)
+    except Exception as e:
+        print(f"Erro fatal: {e}")
