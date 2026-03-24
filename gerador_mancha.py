@@ -14,14 +14,14 @@ CSV_LOCAL = "barragens.csv"
 OUTPUT_DIR = "output"
 # --------------------
 
-# Cria a pasta de saída para o GitHub Actions não falhar
+# Cria a pasta para o GitHub Actions encontrar os arquivos
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
 
 def baixar_mde(url, destino):
     if not os.path.exists('data'): os.makedirs('data')
     if not os.path.exists(destino):
-        print("Baixando MDE...")
+        print("Baixando relevo (MDE)...")
         r = requests.get(url, stream=True)
         r.raise_for_status()
         with open(destino, 'wb') as f:
@@ -37,30 +37,31 @@ def processar(row):
 
     try:
         with rasterio.open(MDE_LOCAL) as src:
-            # Janela de processamento ao redor da barragem
+            # Recorte do terreno ao redor da coordenada
             area_foco = box(x - 2000, y - 5000, x + 2000, y + 2000)
             out_image, out_transform = rio_mask(src, [area_foco], crop=True)
             raster = out_image[0]
             
-            # Gera a geometria da mancha
+            # Vetorização da mancha
             mask = ((raster <= cota) & (raster > 0)).astype('int16')
             results = ({'properties': {'cota': cota, 'nome': nome}, 'geometry': s}
                        for i, (s, v) in enumerate(shapes(mask, mask=(mask == 1), transform=out_transform)))
             
-            # Cria o GeoDataFrame com o CRS do MDE
+            # GeoDataFrame amarrado ao CRS do terreno
             gdf_mancha = gpd.GeoDataFrame.from_features(list(results), crs=src.crs)
             
             if gdf_mancha.empty:
-                print(f"⚠️ Mancha vazia para {nome}.")
+                print(f"⚠️ Mancha vazia para {nome} na cota {cota}.")
                 return
 
-            # SALVA O SHAPEFILE (Gera .shp, .shx, .dbf e .prj)
+            # SALVAMENTO DO SHAPEFILE
+            # O fiona (via geopandas) cria os arquivos .shp e .prj automaticamente
             caminho_shp = os.path.join(OUTPUT_DIR, f"Mancha_{nome}.shp")
             gdf_mancha.to_file(caminho_shp, driver='ESRI Shapefile')
-            print(f"✅ SHP gerado: {caminho_shp}")
+            print(f"✅ SHP gerado com sucesso: {caminho_shp}")
 
     except Exception as e:
-        print(f"❌ Erro em {nome}: {e}")
+        print(f"❌ Erro ao processar {nome}: {e}")
 
 if __name__ == "__main__":
     baixar_mde(f"https://docs.google.com/uc?export=download&id={ID_DRIVE}", MDE_LOCAL)
