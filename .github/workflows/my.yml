@@ -1,43 +1,35 @@
-name: Gerar Mancha Estavel
+name: Gerar Mancha Inundacao
 
 on:
-  workflow_dispatch: # Botão para rodar manualmente na aba Actions
+  workflow_dispatch:
 
 jobs:
-  run_analysis:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout do código
+      - name: Checkout código
         uses: actions/checkout@v4
 
-      - name: Configurar Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Instalar dependências do sistema
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgdal-dev
-
-      - name: Instalar bibliotecas Python
+      - name: Instalar Dependencias
         run: |
           pip install --upgrade pip
-          pip install wheel
-          # Bibliotecas padrão e estáveis de geoprocessamento
-          pip install rasterio geopandas pandas requests fiona shapely scipy
+          pip install rasterio geopandas pandas requests scipy shapely fiona
 
-      - name: Executar Gerador de Mancha
+      - name: Executar Script
         run: |
-          # Garante que a pasta output exista
           mkdir -p output
           python gerador_mancha.py
 
-      - name: Upload dos Resultados (Shapefile)
-        if: always() # Faz o upload mesmo se o script Python der erro, para análise
+      - name: Upload do Shapefile
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Mancha_Inundacao_Resultado
-          path: output/ # Pasta onde o SHP foi salvo
+          name: Mancha_Resultado
+          path: output/
           if-no-files-found: error
