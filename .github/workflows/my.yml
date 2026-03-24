@@ -1,7 +1,7 @@
 name: Gerar Mancha SHP
 
 on:
-  workflow_dispatch: # Permite rodar manualmente clicando no botão
+  workflow_dispatch: # Permite rodar manualmente
 
 jobs:
   run_script:
@@ -24,15 +24,23 @@ jobs:
       - name: Instalar bibliotecas Python
         run: |
           pip install --upgrade pip
+          # Definindo flags para garantir a instalação das libs geo
+          pip install wheel
           pip install rasterio geopandas pandas requests fiona shapely
 
       - name: Executar Script
-        run: python gerador_mancha.py
+        run: |
+          # Criar a pasta de saída para o artifact não falhar
+          mkdir -p output
+          python gerador_mancha.py
+          # Movemos os arquivos gerados para a pasta output (todos que começam com MANCHA)
+          mv MANCHA_NOVO_03* output/
 
       - name: Upload dos Produtos (Apenas SHP)
-        if: always() 
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Produtos_Inundacao_SHP
+          # Aqui ele vai pegar a pasta com os 4 arquivos do Shapefile
           path: output/
           if-no-files-found: error
