@@ -1,6 +1,7 @@
 import pandas as pd
 import geopandas as gpd
 import rasterio
+from rasterio.warp import calculate_default_transform, reproject, Resampling
 import numpy as np
 from shapely.geometry import shape, Point
 from rasterio.features import shapes
@@ -8,42 +9,62 @@ from scipy.ndimage import binary_dilation
 import os
 import gdown
 
-# Configurações de arquivos
+# Configurações
 FILE_ID = "1sBJHHYr0wAKOtO4YHHKZ0fSDj_IiI56_"
-MDE_NOME = "mde_final_utm.tif"
+MDE_ORIGINAL = "mde_original.tif"
+MDE_UTM = "mde_convertido_utm.tif"
+TARGET_CRS = 'EPSG:31983'
+
+def converter_para_utm(entrada, saida):
+    print(f"Convertendo {entrada} para {TARGET_CRS}...")
+    with rasterio.open(entrada) as src:
+        transform, width, height = calculate_default_transform(
+            src.crs, TARGET_CRS, src.width, src.height, *src.bounds)
+        kwargs = src.meta.copy()
+        kwargs.update({
+            'crs': TARGET_CRS,
+            'transform': transform,
+            'width': width,
+            'height': height
+        })
+
+        with rasterio.open(saida, 'w', **kwargs) as dst:
+            for i in range(1, src.count + 1):
+                reproject(
+                    source=rasterio.band(src, i),
+                    destination=rasterio.band(dst, i),
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=transform,
+                    dst_crs=TARGET_CRS,
+                    resampling=Resampling.nearest)
+    print("Conversão concluída!")
 
 def main():
-    # Garante que a pasta de saída existe
     os.makedirs('output', exist_ok=True)
     
-    # 1. Carrega os dados do seu barragens.csv
-    df = pd.read_csv('barragens.csv')
-    dados = df.iloc[0]
-    x_utm, y_utm = dados['x_utm'], dados['y_utm']
-    nome_barragem = dados['nome_barragem']
-
-    # 2. Download do seu MDE reprojetado
+    # 1. Download do arquivo do Drive
     url = f"https://drive.google.com/uc?id={FILE_ID}"
-    gdown.download(url, MDE_NOME, quiet=False)
+    gdown.download(url, MDE_ORIGINAL, quiet=False)
+
+    # 2. CONVERSÃO AUTOMÁTICA PARA UTM
+    converter_para_utm(MDE_ORIGINAL, MDE_UTM)
+
+    # 3. Dados da Genesis I (conforme seu CSV)
+    x_utm, y_utm = 309435, 7406885
 
     try:
-        with rasterio.open(MDE_NOME) as src:
-            # Localiza o pixel exato da coordenada
+        with rasterio.open(MDE_UTM) as src:
             py, px = src.index(x_utm, y_utm)
             raster = src.read(1)
             
-            # --- CAPTURA AUTOMÁTICA DE COTA ---
+            # Pega a cota do terreno e define a inundação (+1m)
             cota_terreno = float(raster[py, px])
-            # Definimos a ruptura 1 metro acima do terreno para garantir o fluxo
             cota_simulacao = cota_terreno + 1.0
             
-            print(f"\n--- DIAGNÓSTICO DE TERRENO ---")
-            print(f"Barragem: {nome_barragem}")
-            print(f"Cota identificada no MDE: {cota_terreno:.2f}m")
-            print(f"Iniciando simulação em: {cota_simulacao:.2f}m")
-            print(f"------------------------------\n")
+            print(f"Cota terreno no mapa convertido: {cota_terreno:.2f}m")
 
-            # Lógica de inundação baseada no relevo
+            # Lógica de inundação
             mask = (raster <= cota_simulacao) & (raster != src.nodata)
             seed = np.zeros_like(mask, dtype=bool)
             seed[py, px] = True
@@ -58,17 +79,11 @@ def main():
             geoms = [shape(s) for s, v in shapes(inundacao.astype('int16'), mask=inundacao==1, transform=src.transform)]
 
         if geoms:
-            gdf = gpd.GeoDataFrame(geometry=geoms, crs="EPSG:31983")
-            gdf.dissolve().to_file(f"output/MANCHA_{nome_barragem}.shp")
-            print(f"✅ SUCESSO: Arquivo MANCHA_{nome_barragem}.shp gerado!")
-        else:
-            # Caso o relevo ainda barre, gera um ponto de controle para conferência
-            print("⚠️ Relevo barrou a expansão. Gerando ponto de conferência.")
-            ponto = Point(x_utm, y_utm)
-            gpd.GeoDataFrame(geometry=[ponto.buffer(50)], crs="EPSG:31983").to_file("output/PONTO_TESTE.shp")
-
+            gdf = gpd.GeoDataFrame(geometry=geoms, crs=TARGET_CRS)
+            gdf.dissolve().to_file("output/MANCHA_REAL_FINAL.shp")
+            print("✅ SUCESSO: Mancha gerada com o arquivo convertido em tempo de execução!")
     except Exception as e:
-        print(f"❌ Erro ao processar o raster: {e}")
+        print(f"❌ Erro: {e}")
 
 if __name__ == "__main__":
     main()
