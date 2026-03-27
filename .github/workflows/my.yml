@@ -1,37 +1,39 @@
-name: Gerar Mancha Estavel
+name: Dam Break Simulation Job
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build:
+  run_simulation:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v3
 
-      - name: Python
-        uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.9'
 
-      - name: Bibliotecas
+      - name: Install System Dependencies
         run: |
-          pip install --upgrade pip
-          # Adicionado gdown para o download do Google Drive
-          pip install rasterio geopandas pandas requests scipy shapely fiona gdown
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin libgdal-dev
 
-      - name: Executar
+      - name: Install Python Libraries
         run: |
-          mkdir -p output
-          # O gdown precisa que o arquivo de destino não exista para baixar limpo
-          rm -f mde_final_utm.tif 
-          python gerador_mancha.py
+          pip install numpy pandas rasterio geopandas shapely gdown
 
-      - name: Download Resultado
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mancha_SHP
-          path: output/
+      - name: Run Dam Break Script
+        run: python gerador_mancha.py
+
+      - name: Save and Push Results
+        run: |
+          git config --global user.name 'DamBreakBot'
+          git config --global user.email 'bot@noreply.github.com'
+          git add manchas_output/*.geojson
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Novas manchas de inundação geradas" && git push)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
