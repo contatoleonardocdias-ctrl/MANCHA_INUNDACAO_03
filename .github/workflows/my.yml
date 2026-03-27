@@ -1,4 +1,4 @@
-name: Dam Break Automation
+name: Dam Break Automation Fixed
 
 on:
   push:
@@ -33,17 +33,13 @@ jobs:
         run: |
           git config --global user.name 'DamBreakBot'
           git config --global user.email 'bot@noreply.github.com'
-          
-          # Garante que a pasta existe antes de tentar adicionar
           mkdir -p manchas_output
-          
-          # Só tenta fazer o commit se existirem arquivos .geojson
-          if ls manchas_output/*.geojson 1> /dev/null 2>&1; then
+          if [ -n "$(ls -A manchas_output/*.geojson 2>/dev/null)" ]; then
             git add manchas_output/*.geojson
-            git commit -m "Bot: Novas manchas geradas automaticamente"
+            git commit -m "Bot: Gerado M20 e M50 para Genesis I"
             git push
           else
-            echo "Nenhuma mancha foi gerada. Verifique os logs do script Python."
+            echo "Nenhuma mancha gerada para commitar."
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
