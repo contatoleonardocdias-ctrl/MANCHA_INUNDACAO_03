@@ -4,65 +4,60 @@ import rasterio
 from rasterio.features import shapes
 import geopandas as gpd
 from shapely.geometry import shape
-import gdown
+import elevation
 
-# --- VALORES FIXOS (Gênesis I) ---
-# ID extraído do seu link: https://drive.google.com/file/d/1wijgoCGYzWcYplEqV0lewgh_xjjaimvf/view
-ID_MDE = '1wijgoCGYzWcYplEqV0lewgh_xjjaimvf' 
-NOME_BARRAGEM = 'Genesis_I'
-X_UTM = 309435.0  #
-Y_UTM = 7406885.0 #
-COTA_M20 = 745.0  # Cota de Ruptura
-COTA_M50 = 747.0  # Ruptura + 2m de Cheia de Projeto
-DISTANCIA_LIMITE = 6000.0 # Limite de 6km
+# --- CONFIGURAÇÃO BLINDADA (Gênesis I) ---
+NOME = 'Genesis_I'
+X_UTM, Y_UTM = 309435.0, 7406885.0
+COTA_M20 = 745.0
+COTA_M50 = 747.0 # M-20 + 2m (Lâmina de cheia fixada)
+RAIO_M = 6000.0
+ARQUIVO_LOCAL = '23S48_ZN.tif'
+ARQUIVO_AUTO = 'mde_srtm.tif'
 
-OUTPUT_DIR = 'manchas_output'
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-def baixar_mde():
-    output = "terreno_estudo.tif"
-    if not os.path.exists(output):
-        print(f"-> Baixando MDE do Google Drive...")
-        url = f'https://drive.google.com/uc?id={ID_MDE}'
-        gdown.download(url, output, quiet=False)
-    return output
-
-def gerar_mancha():
-    mde_path = baixar_mde()
+def obter_mde():
+    # 1. Tenta usar o arquivo que você baixou do Topodata
+    if os.path.exists(ARQUIVO_LOCAL):
+        print(f"-> Usando arquivo local do Topodata: {ARQUIVO_LOCAL}")
+        return ARQUIVO_LOCAL
     
-    with rasterio.open(mde_path) as src:
-        dem = src.read(1)
-        transform = src.transform
-        crs = src.crs # EPSG:31983
-        
-        # Matriz de distâncias para travar em 6km
-        cols, rows_idx = np.meshgrid(np.arange(dem.shape[1]), np.arange(dem.shape[0]))
-        xs, ys = rasterio.transform.xy(transform, rows_idx, cols)
-        dist_matrix = np.sqrt((np.array(xs) - X_UTM)**2 + (np.array(ys) - Y_UTM)**2)
-        
-        for cota, sufixo in [(COTA_M20, 'M20'), (COTA_M50, 'M50')]:
-            print(f" Processando cenário {sufixo} (Cota: {cota}m)...")
+    # 2. Se não tiver o local, ele tenta baixar sozinho (NASA/SRTM)
+    print("-> Arquivo local não encontrado. Tentando download automático (SRTM)...")
+    bounds = (-46.90, -23.48, -46.80, -23.38) # Bbox da região
+    elevation.clip(bounds=bounds, output=ARQUIVO_AUTO)
+    elevation.clean()
+    return ARQUIVO_AUTO
+
+def processar():
+    try:
+        mde_path = obter_mde()
+        with rasterio.open(mde_path) as src:
+            dem = src.read(1)
+            transform = src.transform
+            crs = src.crs
             
-            # Lógica: Abaixo da cota E dentro do raio de 6km
-            mask = (dem <= cota) & (dem > -50) & (dist_matrix <= DISTANCIA_LIMITE)
-            mask_int = mask.astype('int16')
+            # Matriz de distância para travar nos 6km
+            cols, rows = np.meshgrid(np.arange(dem.shape[1]), np.arange(dem.shape[0]))
+            xs, ys = rasterio.transform.xy(transform, rows, cols)
+            dist = np.sqrt((np.array(xs) - X_UTM)**2 + (np.array(ys) - Y_UTM)**2)
             
-            shape_gen = shapes(mask_int, mask=mask, transform=transform)
-            geoms = [shape(s) for s, v in shape_gen if v == 1]
+            os.makedirs('manchas_output', exist_ok=True)
             
-            if geoms:
-                gdf = gpd.GeoDataFrame(geometry=geoms, crs=crs)
-                gdf['barragem'] = NOME_BARRAGEM
-                gdf['cenario'] = sufixo
+            for cota, label in [(COTA_M20, 'M20'), (COTA_M50, 'M50')]:
+                # Lógica: Terreno <= Cota E dentro do raio de 6km
+                mask = (dem <= cota) & (dem > 0) & (dist <= RAIO_M)
                 
-                output_file = os.path.join(OUTPUT_DIR, f"{NOME_BARRAGEM}_{sufixo}.geojson")
-                gdf.to_file(output_file, driver='GeoJSON')
-                print(f" ✅ Arquivo gerado: {output_file}")
-            else:
-                print(f" ⚠️ Aviso: Nenhuma área encontrada para {sufixo}.")
+                gen = shapes(mask.astype('int16'), mask=mask, transform=transform)
+                geoms = [shape(s) for s, v in gen if v == 1]
+                
+                if geoms:
+                    gdf = gpd.GeoDataFrame(geometry=geoms, crs=crs)
+                    gdf['barragem'] = NOME
+                    gdf['cenario'] = label
+                    gdf.to_file(f'manchas_output/Mancha_{label}.geojson', driver='GeoJSON')
+                    print(f" ✅ Gerado: {label}")
+    except Exception as e:
+        print(f" ❌ Erro no processamento: {e}")
 
 if __name__ == "__main__":
-    try:
-        gerar_mancha()
-    except Exception as e:
-        print(f" ❌ Erro: {e}")
+    processar()
