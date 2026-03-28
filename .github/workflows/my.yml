@@ -1,4 +1,4 @@
-name: Dam Break Automation Fixed
+name: Dam Break Automation Total
 
 on:
   push:
@@ -9,7 +9,7 @@ jobs:
   run_simulation:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -17,29 +17,24 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install System Dependencies
+      - name: Install System and Python Libs
         run: |
           sudo apt-get update
           sudo apt-get install -y gdal-bin libgdal-dev
-
-      - name: Install Python Libraries
-        run: |
-          pip install numpy pandas rasterio geopandas shapely gdown
+          pip install numpy rasterio geopandas shapely elevation gdown
 
       - name: Run Dam Break Script
         run: python gerador_mancha.py
 
-      - name: Save and Push Results
+      - name: Save Results
         run: |
           git config --global user.name 'DamBreakBot'
           git config --global user.email 'bot@noreply.github.com'
           mkdir -p manchas_output
           if [ -n "$(ls -A manchas_output/*.geojson 2>/dev/null)" ]; then
             git add manchas_output/*.geojson
-            git commit -m "Bot: Gerado M20 e M50 para Genesis I"
+            git commit -m "Bot: Manchas M20 e M50 geradas com Elevation"
             git push
-          else
-            echo "Nenhuma mancha gerada para commitar."
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
