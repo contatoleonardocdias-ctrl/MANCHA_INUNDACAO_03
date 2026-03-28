@@ -1,4 +1,4 @@
-name: Automacao Dam Break KMZ + NASA
+name: Dam Break Automatizado - Resolucao Erro NASA
 
 on:
   push:
@@ -17,11 +17,11 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install System and Python Libs
+      - name: Install Libs
         run: |
           sudo apt-get update
           sudo apt-get install -y gdal-bin libgdal-dev
-          pip install numpy rasterio geopandas shapely fiona elevation
+          pip install numpy rasterio geopandas shapely fiona requests
 
       - name: Run Script
         run: python gerador_mancha.py
@@ -33,7 +33,7 @@ jobs:
           mkdir -p manchas_output
           if [ -n "$(ls -A manchas_output/*.geojson 2>/dev/null)" ]; then
             git add manchas_output/*.geojson
-            git commit -m "Bot: Manchas geradas via KMZ e NASA SRTM"
+            git commit -m "Bot: Manchas geradas via API OpenTopography"
             git push
           fi
         env:
