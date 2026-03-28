@@ -1,4 +1,4 @@
-name: Dam Break Automation Total
+name: Automacao Dam Break KMZ + NASA
 
 on:
   push:
@@ -21,9 +21,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gdal-bin libgdal-dev
-          pip install numpy rasterio geopandas shapely elevation gdown
+          pip install numpy rasterio geopandas shapely fiona elevation
 
-      - name: Run Dam Break Script
+      - name: Run Script
         run: python gerador_mancha.py
 
       - name: Save Results
@@ -33,7 +33,7 @@ jobs:
           mkdir -p manchas_output
           if [ -n "$(ls -A manchas_output/*.geojson 2>/dev/null)" ]; then
             git add manchas_output/*.geojson
-            git commit -m "Bot: Manchas M20 e M50 geradas com Elevation"
+            git commit -m "Bot: Manchas geradas via KMZ e NASA SRTM"
             git push
           fi
         env:
