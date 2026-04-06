@@ -4,67 +4,62 @@ import rasterio
 from rasterio.features import shapes
 import geopandas as gpd
 from shapely.geometry import shape
-import fiona
-import requests
+import pandas as pd
 
 # --- CONFIGURAÇÃO ---
-KMZ_FILE = 'MANCHA_INUNDACAO.kmz'
-COTA_M20 = 745.0
-COTA_M50 = 747.0 # M-20 + 2m (Segurança de Barragens IPT)
-RAIO_M = 15000.0 # 15km
-MDE_FINAL = 'relevo_final.tif'
-
-def baixar_mde_alternativo(lat, lon):
-    """Baixa o relevo usando a API pública do OpenTopography (SRTM 30m)"""
-    print(f"-> Baixando relevo via OpenTopography para Lat:{lat}, Lon:{lon}...")
-    margin = 0.15
-    west, south, east, north = lon - margin, lat - margin, lon + margin, lat + margin
-    
-    url = f"https://portal.opentopography.org/API/globaldem?demtype=SRTM30&west={west}&south={south}&east={east}&north={north}&outputFormat=GTiff"
-    
-    response = requests.get(url)
-    if response.status_code == 200:
-        with open(MDE_FINAL, 'wb') as f:
-            f.write(response.content)
-        return True
-    else:
-        print(f"❌ Erro na API: {response.status_code}")
-        return False
+# Alterado para o novo arquivo que você subiu
+MDT_FILE = 'MDT_GENESIS.tif'  
+CSV_FILE = 'barragens.csv'  
+RAIO_M = 15000.0           
+OUTPUT_DIR = 'manchas_output'
 
 def processar():
-    if not os.path.exists(KMZ_FILE):
-        print("❌ KMZ não encontrado!")
+    if not os.path.exists(MDT_FILE):
+        print(f"❌ Arquivo MDT '{MDT_FILE}' não encontrado!")
+        return
+    if not os.path.exists(CSV_FILE):
+        print(f"❌ Arquivo CSV '{CSV_FILE}' não encontrado!")
         return
 
-    # 1. Localização pelo KMZ
-    fiona.drvsupport.supported_drivers['KML'] = 'rw'
-    fiona.drvsupport.supported_drivers['LIBKML'] = 'rw'
-    with fiona.open(f'zip://{KMZ_FILE}') as layer:
-        gdf_kmz = gpd.GeoDataFrame.from_features(layer, crs=layer.crs)
-        ponto = gdf_kmz.geometry.centroid.iloc[0]
-        lon, lat = ponto.x, ponto.y
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # 2. Download do relevo (Nova tentativa via API direta)
-    if baixar_mde_alternativo(lat, lon):
-        with rasterio.open(MDE_FINAL) as src:
-            dem = src.read(1)
-            cols, rows = np.meshgrid(np.arange(dem.shape[1]), np.arange(dem.shape[0]))
-            xs, ys = rasterio.transform.xy(src.transform, rows, cols)
+    with rasterio.open(MDT_FILE) as src:
+        dem = src.read(1)
+        # Cria malha de coordenadas baseada no arquivo TIF (UTM)
+        cols, rows = np.meshgrid(np.arange(dem.shape[1]), np.arange(dem.shape[0]))
+        xs, ys = rasterio.transform.xy(src.transform, rows, cols)
+        xs = np.array(xs)
+        ys = np.array(ys)
+
+        df = pd.read_csv(CSV_FILE)
+
+        for index, row in df.iterrows():
+            nome = str(row['nome']).replace(" ", "_")
+            # Usa as colunas utm_x e utm_y do seu CSV
+            x_barragem, y_barragem = row['utm_x'], row['utm_y']
+            cota_m20 = row['cota_ruptura']
+            cota_m50 = cota_m20 + 2.0  # Margem de segurança IPT
             
-            # Distância aproximada
-            dist = np.sqrt((np.array(xs) - lon)**2 + (np.array(ys) - lat)**2) * 111320
-            
-            os.makedirs('manchas_output', exist_ok=True)
-            
-            for cota, label in [(COTA_M20, 'M20'), (COTA_M50, 'M50')]:
+            print(f"-> Processando: {nome} | Cota Ruptura: {cota_m20}m")
+
+            # Cálculo de distância real em metros (UTM)
+            dist = np.sqrt((xs - x_barragem)**2 + (ys - y_barragem)**2)
+
+            for cota, label in [(cota_m20, 'M20'), (cota_m50, 'M50')]:
+                # Máscara: pixels abaixo da cota, maiores que zero e dentro do raio de 15km
                 mask = (dem <= cota) & (dem > 0) & (dist <= RAIO_M)
-                gen = shapes(mask.astype('int16'), mask=mask, transform=src.transform)
-                geoms = [shape(s) for s, v in gen if v == 1]
                 
-                if geoms:
-                    gdf = gpd.GeoDataFrame(geometry=geoms, crs=src.crs)
-                    gdf.to_file(f'manchas_output/Mancha_{label}_15km.geojson', driver='GeoJSON')
-                    print(f" ✅ Sucesso: {label} gerado.")
+                if np.any(mask):
+                    gen = shapes(mask.astype('int16'), mask=mask, transform=src.transform)
+                    geoms = [shape(s) for s, v in gen if v == 1]
+                    
+                    if geoms:
+                        gdf = gpd.GeoDataFrame(geometry=geoms, crs=src.crs)
+                        nome_saida = f'{OUTPUT_DIR}/Mancha_{nome}_{label}.geojson'
+                        gdf.to_file(nome_saida, driver='GeoJSON')
+                        print(f"   ✅ Gerado: {nome_saida}")
+                else:
+                    print(f"   ⚠️ Nenhuma área inundada encontrada para {nome} na cota {cota}")
 
 if __name__ == "__main__":
     processar()
